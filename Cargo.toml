@@ -1,0 +1,12 @@
+[package]
+name = "dt-client"
+version = "0.1.0"
+authors = ["Rafael"]
+edition = "2018"
+
+
+[dependencies]
+
+rumq-client = "0.1.0-alpha.10"
+tokio = { version = "0.2", features = ["io-util", "tcp", "dns", "stream", "sync", "time", "macros"] }
+rand = "0.7"
