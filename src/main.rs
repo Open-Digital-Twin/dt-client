@@ -9,6 +9,10 @@ use tokio::{task, time};
 use std::env;
 use rumq_client::{eventloop, MqttEventLoop, MqttOptions, Publish, QoS, Request};
 use std::time::Duration;
+use std::fs::File;
+use std::io::{BufReader};
+use std::io::prelude::*;
+
 
 mod model;
 
@@ -38,6 +42,9 @@ async fn main() {
              }
     }
 
+
+
+
   
     let (requests_tx, requests_rx) = channel(10);
     let port = port.parse::<u16>().unwrap();
@@ -48,8 +55,11 @@ async fn main() {
     let coordinates = assort_coordinates(&mode);
     let adress = format!("http://api.openweathermap.org/data/2.5/weather?lat={}&lon={}&appid=f02ef3d664e7ad0b33020a0ecbf896b2",coordinates.lat.to_string(),coordinates.lon.to_string());
 
+    let topic = get_topic_list(&mode);
+    
+
     task::spawn(async move {
-        requests(requests_tx, adress).await;
+        requests(requests_tx, adress,topic).await;
         time::delay_for(Duration::from_secs(3)).await;
     });
     
@@ -65,23 +75,29 @@ async fn stream_it(eventloop: &mut MqttEventLoop) {
     //Sim , isso é muito feio mas ainda nao descobri outro jeito de fazer isso -R
 
     while let Some(_item) = stream.next().await {}
-
 }
 
-async fn requests(mut requests_tx: Sender<Request>,adress : String)  ->  Result<(), Box<dyn std::error::Error>>  {
+async fn requests(mut requests_tx: Sender<Request>,adress : String, topic:String)  ->  Result<(), Box<dyn std::error::Error>>  {
         let mut weather : model::Weather;
      loop{
-        weather = reqwest::get(&adress).await?.json().await?; 
-        let payload = format!("Weather in {} is {:.4}" ,weather.name,(weather.condition.temp-273.0).to_string());   
-        requests_tx.send(publish_request(&payload)).await.unwrap();
-        time::delay_for(Duration::from_secs(10)).await;
+        weather = reqwest::get(&adress).await?.json().await?;
+        println!("{}",weather.name); 
+        let payload =(weather.condition.temp-273.0).to_string();   
+        requests_tx.send(publish_request(&payload,&topic)).await.unwrap();
+        time::delay_for(Duration::from_secs(1)).await;
+        for _i in 0..15 {
+            requests_tx.send(publish_request(&payload,&topic)).await.unwrap();
+            time::delay_for(Duration::from_secs(1)).await;
+        }
+
         }
    
 }
 
-fn publish_request(payload : &str) -> Request {
+fn publish_request(payload : &str, topic : &str) -> Request {
 
-    let topic = "TEST".to_owned();
+    let topic = topic.to_owned();
+    println!("{}",topic);
     let message = String::from(payload);
  
     let publish = Publish::new(&topic, QoS::AtLeastOnce,message);
@@ -92,12 +108,6 @@ fn publish_request(payload : &str) -> Request {
 fn assort_coordinates(mode : &str) -> model::Coords{    
 let coordinates : model::Coords;
     match mode {
-
-        "1" =>
-        {//Porto Alegre
-        coordinates = model::Coords{lat : -30.0331 , lon :-51.2287};
-        // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};
-        }
 
         "2" =>
         {//Dublin
@@ -117,16 +127,52 @@ let coordinates : model::Coords;
        // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};    
         }
 
-        _ =>
+        "5"=>
         {//Sydney
         coordinates = model::Coords{lat : -33.8679 , lon :151.2073};
        // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};    
-        }       
+        }  
+        
+        "6"=>
+        {//Salvador
+        coordinates = model::Coords{lat : -12.97 , lon :-38.47};
+        println!{"lat {} lon {}",coordinates.lat,coordinates.lon};   
+        }
+
+        "7"=>
+        {//Oslo
+        coordinates = model::Coords{lat : 59.91 , lon :10.73};
+        println!{"lat {} lon {}",coordinates.lat,coordinates.lon};     
+        }
+
+        _ =>
+        {//Porto Alegre
+        coordinates = model::Coords{lat : -30.0331 , lon :-51.2287};
+       // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};
+        }
+
     }
     
     return coordinates;
 }
 
 
+fn get_topic_list(mode : &str)-> String{
 
- 
+let f = File::open("topic_names.txt").expect("cant open file");
+let f = BufReader::new(f);
+let mut topic = String::new();
+let it = mode.parse::<u16>().unwrap();
+let mut counter = 0;
+
+for line in f.lines(){
+   counter += 1; 
+   
+   if counter == it
+   {
+   topic = line.unwrap();  
+   //println!("{}",topic); 
+   }     
+}
+topic
+}
