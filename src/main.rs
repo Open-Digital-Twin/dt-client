@@ -22,8 +22,8 @@ async fn main() {
     let args:Vec<String> = env::args().collect();
 
     let mut port = "1883";
+    let mut adress ="localhost";
     let mut mode = "1";
-
 
     match args.len() - 1 {
 
@@ -33,9 +33,14 @@ async fn main() {
 
         2=>{
             port = &args[1];
-            mode = &args[2];
+            adress = &args[2];
             }
 
+        3=>{
+            port = &args[1];
+            adress = &args[2];
+            mode = &args[3];
+            }
 
         _ =>{
             println!("invalid number of arguments");
@@ -43,12 +48,12 @@ async fn main() {
     }
 
 
-
+    println!("{},{},{}",port,adress,mode);
 
   
     let (requests_tx, requests_rx) = channel(10);
     let port = port.parse::<u16>().unwrap();
-    let mut mqttoptions = MqttOptions::new("CLIENT", "localhost", port);
+    let mut mqttoptions = MqttOptions::new("CLIENT", adress, port);
     mqttoptions.set_keep_alive(5).set_throttle(Duration::from_secs(1));
     let mut eventloop = eventloop(mqttoptions, requests_rx);
 
@@ -81,7 +86,6 @@ async fn requests(mut requests_tx: Sender<Request>,adress : String, topic:String
         let mut weather : model::Weather;
      loop{
         weather = reqwest::get(&adress).await?.json().await?;
-        println!("{}",weather.name); 
         let payload =(weather.condition.temp-273.0).to_string();   
         requests_tx.send(publish_request(&payload,&topic)).await.unwrap();
         time::delay_for(Duration::from_secs(1)).await;
@@ -97,7 +101,6 @@ async fn requests(mut requests_tx: Sender<Request>,adress : String, topic:String
 fn publish_request(payload : &str, topic : &str) -> Request {
 
     let topic = topic.to_owned();
-    println!("{}",topic);
     let message = String::from(payload);
  
     let publish = Publish::new(&topic, QoS::AtLeastOnce,message);
