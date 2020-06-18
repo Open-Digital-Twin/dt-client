@@ -1,181 +1,137 @@
-#![feature(plugin)]
-
 #[macro_use]
 
 extern crate serde;
 use tokio::stream::StreamExt;
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{channel, Sender, Receiver};
 use tokio::{task, time};
+
+// use std::sync::mpsc::channel;
+// use std::thread;
+
 use std::env;
-use rumq_client::{eventloop, MqttEventLoop, MqttOptions, Publish, QoS, Request};
+use rumq_client::{eventloop, MqttOptions, Publish, QoS, Request};
 use std::time::Duration;
 use std::fs::File;
 use std::io::{BufReader};
 use std::io::prelude::*;
 
+extern crate env_logger;
+use log::{info, error};
 
 mod model;
 
-#[tokio::main(basic_scheduler)]
+#[tokio::main]
 async fn main() {
+  env_logger::init();
 
-    let args:Vec<String> = env::args().collect();
+  let address = env::var("MQTT_BROKER_ADDRESS").unwrap();
+  let port = env::var("MQTT_BROKER_PORT").unwrap().parse::<u16>().unwrap();
 
-    let mut port = "1883";
-    let mut adress ="localhost";
-    let mut mode = "1";
+  info!("Starting client. Host at {}:{}", address.clone(), port.clone());
 
-    match args.len() - 1 {
-
-        1=>{
-            port = &args[1];
-            }
-
-        2=>{
-            port = &args[1];
-            adress = &args[2];
-            }
-
-        3=>{
-            port = &args[1];
-            adress = &args[2];
-            mode = &args[3];
-            }
-
-        _ =>{
-            println!("invalid number of arguments");
-             }
-    }
-
-
-    println!("{},{},{}",port,adress,mode);
-
+  let count = get_lines();
   
-    let (requests_tx, requests_rx) = channel(10);
-    let port = port.parse::<u16>().unwrap();
-    let mut mqttoptions = MqttOptions::new("CLIENT", adress, port);
-    mqttoptions.set_keep_alive(5).set_throttle(Duration::from_secs(1));
-    let mut eventloop = eventloop(mqttoptions, requests_rx);
+  let (mut requests_tx, requests_rx) = channel(50);
+  let mut eloop;
+  let mut mqttoptions = MqttOptions::new("client", address.clone(), port);
+  mqttoptions.set_keep_alive(5).set_throttle(Duration::from_secs(1));
+  eloop = eventloop(mqttoptions, requests_rx);
 
-    let coordinates = assort_coordinates(&mode);
-    let adress = format!("http://api.openweathermap.org/data/2.5/weather?lat={}&lon={}&appid=f02ef3d664e7ad0b33020a0ecbf896b2",coordinates.lat.to_string(),coordinates.lon.to_string());
 
-    let topic = get_topic_list(&mode);
+  let tx_c = requests_tx.clone();
+  for i in 0..count {
+    let topic = get_topic(i);
+    let coordinates = assort_coordinates(i);
     
-
+    let tx = tx_c.clone();
     task::spawn(async move {
-        requests(requests_tx, adress,topic).await;
-        time::delay_for(Duration::from_secs(3)).await;
-    });
-    
+      info!("Thread {}", topic.clone());
 
-    stream_it(&mut eventloop).await;
+      let api_address = format!(
+        "http://api.openweathermap.org/data/2.5/weather?lat={}&lon={}&appid={}", 
+        coordinates.lat.to_string(),
+        coordinates.lon.to_string(),
+        "f02ef3d664e7ad0b33020a0ecbf896b2"
+      );
 
-
-}
-
-async fn stream_it(eventloop: &mut MqttEventLoop) {
-    let mut stream = eventloop.connect().await.unwrap();
-
-    //Sim , isso é muito feio mas ainda nao descobri outro jeito de fazer isso -R
-
-    while let Some(_item) = stream.next().await {}
-}
-
-async fn requests(mut requests_tx: Sender<Request>,adress : String, topic:String)  ->  Result<(), Box<dyn std::error::Error>>  {
-        let mut weather : model::Weather;
-     loop{
-        weather = reqwest::get(&adress).await?.json().await?;
-        let payload =(weather.condition.temp-273.0).to_string();   
-        requests_tx.send(publish_request(&payload,&topic)).await.unwrap();
-        time::delay_for(Duration::from_secs(1)).await;
-        for _i in 0..15 {
-            requests_tx.send(publish_request(&payload,&topic)).await.unwrap();
-            time::delay_for(Duration::from_secs(1)).await;
-        }
-
-        }
-   
-}
-
-fn publish_request(payload : &str, topic : &str) -> Request {
-
-    let topic = topic.to_owned();
-    let message = String::from(payload);
- 
-    let publish = Publish::new(&topic, QoS::AtLeastOnce,message);
-    Request::Publish(publish)
-}
-
-
-fn assort_coordinates(mode : &str) -> model::Coords{    
-let coordinates : model::Coords;
-    match mode {
-
-        "2" =>
-        {//Dublin
-        coordinates = model::Coords{lat : 53.34 , lon :-6.26};
-        // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};    
-        }
-
-        "3" =>
-        {//Tokyo
-        coordinates = model::Coords{lat : 35.6894 , lon :139.6920};
-       // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};    
-        }
-
-        "4"=>
-        {//Moscou
-        coordinates = model::Coords{lat : 55.7508 , lon :37.6172};
-       // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};    
-        }
-
-        "5"=>
-        {//Sydney
-        coordinates = model::Coords{lat : -33.8679 , lon :151.2073};
-       // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};    
-        }  
+      let mut weather: model::Weather;
+      loop {
+        weather = reqwest::get(&api_address.clone()).await.unwrap().json().await.unwrap();
+        let payload = (weather.condition.temp - 273.0).to_string();
         
-        "6"=>
-        {//Salvador
-        coordinates = model::Coords{lat : -12.97 , lon :-38.47};
-        println!{"lat {} lon {}",coordinates.lat,coordinates.lon};   
+        for _i in 0..5 {
+          tx.clone().send(publish_request(&payload, &topic.clone())).await.unwrap();
+          info!("{}:{}", payload, topic.clone());
+          time::delay_for(Duration::from_millis(100)).await;
         }
+      }
+    });
+  }
 
-        "7"=>
-        {//Oslo
-        coordinates = model::Coords{lat : 59.91 , lon :10.73};
-        println!{"lat {} lon {}",coordinates.lat,coordinates.lon};     
-        }
+  let mut stream = eloop.connect().await.unwrap();
+  // Sim , isso é muito feio mas ainda nao descobri outro jeito de fazer isso -R
+  while let Some(_item) = stream.next().await {}
+}
 
-        _ =>
-        {//Porto Alegre
-        coordinates = model::Coords{lat : -30.0331 , lon :-51.2287};
-       // println!{"lat {} lon {}",coordinates.lat,coordinates.lon};
-        }
+fn publish_request(payload: &str, topic: &str) -> Request {
+  let topic = topic.to_owned();
+  let message = String::from(payload);
 
+  let publish = Publish::new(&topic, QoS::AtLeastOnce, message);
+  Request::Publish(publish)
+}
+
+fn assort_coordinates(mode: usize) -> model::Coords{
+  let coordinates: model::Coords;
+
+  match mode {
+    0 => { // Porto Alegre
+      coordinates = model::Coords{ lat: -30.0331, lon: -51.2287 };
     }
-    
-    return coordinates;
+    1 => { // Dublin
+      coordinates = model::Coords{ lat: 53.34, lon: -6.26 };
+    }
+    2 => { // Tokyo
+      coordinates = model::Coords{ lat: 35.6894, lon: 139.6920 };
+    }
+    3 => { // Moscou
+      coordinates = model::Coords{ lat: 55.7508, lon: 37.6172 };
+    }
+    4 => { // Sydney
+      coordinates = model::Coords{ lat: -33.8679, lon: 151.2073 };
+    }
+    5 => { // Salvador
+      coordinates = model::Coords{ lat: -12.97, lon: -38.47 };
+    }
+    6 => { // Oslo
+      coordinates = model::Coords{ lat: 59.91, lon: 10.73 };
+    }
+    _ => { return assort_coordinates(0); }
+  }
+
+  return coordinates;
 }
 
+fn get_topic(line_num: usize) -> String {
+  let f = File::open("topic_names.txt").expect("Open topic file");
+  let buffer = BufReader::new(f);
+  let mut topic = String::new();
 
-fn get_topic_list(mode : &str)-> String{
+  let mut counter = 0;
 
-let f = File::open("topic_names.txt").expect("cant open file");
-let f = BufReader::new(f);
-let mut topic = String::new();
-let it = mode.parse::<u16>().unwrap();
-let mut counter = 0;
+  for line in buffer.lines() {
+    if counter == line_num {
+      topic = line.unwrap();
+    }
+    counter += 1;
+  }
 
-for line in f.lines(){
-   counter += 1; 
-   
-   if counter == it
-   {
-   topic = line.unwrap();  
-   //println!("{}",topic); 
-   }     
+  topic
 }
-topic
+
+fn get_lines() -> usize {
+  let f = File::open("topic_names.txt").expect("Open topic file");
+  let buffer = BufReader::new(f);
+
+  buffer.lines().count()
 }
