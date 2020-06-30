@@ -100,11 +100,24 @@ async fn main() {
   while let Some(_item) = stream.next().await {}
 }
 
+fn get_qos(variable: &str) -> QoS {
+  let qos_value = env::var(variable).unwrap().parse::<u8>().unwrap();
+
+  match qos_value {
+    0 => QoS::AtMostOnce,
+    1 => QoS::AtLeastOnce,
+    2 => QoS::ExactlyOnce,
+    _ => QoS::AtMostOnce
+  }
+}
+
 fn publish_request(payload: &str, topic: &str) -> Request {
   let topic = topic.to_owned();
   let message = String::from(payload);
 
-  let publish = Publish::new(&topic, QoS::AtLeastOnce, message);
+  let qos = get_qos("MQTT_CLIENT_QOS");
+
+  let publish = Publish::new(&topic, qos, message);
   Request::Publish(publish)
 }
 
